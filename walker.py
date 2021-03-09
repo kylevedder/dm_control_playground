@@ -129,10 +129,13 @@ def make_creature(num_legs):
 
 #@title Six Creatures on a floor.{vertical-output: true}
 
+img_width = 640
+img_height = 480
+
 arena = mjcf.RootElement()
-children = arena.visual.get_children("global")
-children.set_attributes(offwidth="1920")
-children.set_attributes(offheight="1080")
+tglobal = arena.visual.get_children("global")
+tglobal.set_attributes(offwidth=f"{img_width}")
+tglobal.set_attributes(offheight=f"{img_height}")
 
 chequered = arena.asset.add('texture', type='2d', builtin='checker', width=300,
                             height=300, rgb1=[.2, .3, .4], rgb2=[.3, .4, .5])
@@ -143,7 +146,7 @@ for x in [-2, 2]:
   arena.worldbody.add('light', pos=[x, -1, 3], dir=[-x, 1, -2])
 
 # Instantiate 6 creatures with 3 to 8 legs.
-creatures = [make_creature(num_legs=num_legs) for num_legs in range(3, 9)]
+creatures = [make_creature(num_legs=num_legs) for num_legs in range(1, 7)]
 
 # Place them on a grid in the arena.
 height = .15
@@ -158,7 +161,7 @@ for i, model in enumerate(creatures):
 
 # Instantiate the physics and render.
 physics = mjcf.Physics.from_mjcf_model(arena)
-camera = mujoco.Camera(physics, 1080, 1920)
+camera = mujoco.Camera(physics, img_height, img_width)
 plt.imshow(PIL.Image.fromarray(camera.render()))
 plt.show()
 

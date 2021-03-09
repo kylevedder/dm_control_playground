@@ -39,9 +39,9 @@ void VerifyFile(std::string filename) {
   }
   fclose(stream);
   std::cout << "Read " << points.size() << " points" << std::endl;
-  std::cout << "Last point: " << points.back().px_ << ", " << points.back().py_
-            << ", " << points.back().pz_ << ", " << points.back().pr_
-            << std::endl;
+  // std::cout << "Last point: " << points.back().px_ << ", " << points.back().py_
+  //           << ", " << points.back().pz_ << ", " << points.back().pr_
+  //           << std::endl;
 }
 
 int main(int argc, char **argv) {
