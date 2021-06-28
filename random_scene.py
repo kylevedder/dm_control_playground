@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-
+import argparse
 import dm_control
 import dm_control.mujoco as mujoco
 import matplotlib.pyplot as plt
@@ -10,6 +10,8 @@ import depth_camera
 from PIL import Image
 import pandas as pd
 import sys
+
+import open3d as o3d
 
 from pyntcloud import PyntCloud
 import pandas as pd
@@ -65,11 +67,21 @@ from IPython.display import HTML
 import PIL.Image
 np.random.seed(1)
 
+img_width = 320//2
+img_height = 240//2
+NUM_CREATURES = 6
 BODY_RADIUS = 0.1
 BODY_SIZE = (BODY_RADIUS, BODY_RADIUS/2, BODY_RADIUS / 2)
 random_state = np.random.RandomState(42)
 
-dataset_folder = sys.argv[1]
+parser = argparse.ArgumentParser()
+parser.add_argument('dataset_folder', help='Folder to create datset in')
+args = parser.parse_args()
+
+dataset_folder = args.dataset_folder
+
+def make_quat(rotpos):
+  return np.array([np.roll(Rotation.from_euler('xyz', [0, 0, r], degrees=True).as_quat(), 1) for r in rotpos])
 
 def make_creature(idx):
   rgba = random_state.uniform([0, 0, 0, 1], [1, 1, 1, 1])
@@ -78,42 +90,74 @@ def make_creature(idx):
       'geom', name=f'torso{idx}', type='ellipsoid', size=BODY_SIZE, rgba=rgba)
   return model
 
-#@title Six Creatures on a floor.{vertical-output: true}
+def make_arena():
+  arena = mjcf.RootElement()
+  tglobal = arena.visual.get_children("global")
+  tglobal.set_attributes(offwidth=f"{img_width}")
+  tglobal.set_attributes(offheight=f"{img_height}")
 
-img_width = 320//2
-img_height = 240//2
+  checkered = arena.asset.add('texture', type='2d', builtin='checker', width=300,
+                              height=300, rgb1=[.2, .3, .4], rgb2=[.3, .4, .5])
+  grid = arena.asset.add('material', name='grid', texture=checkered,
+                        texrepeat=[5, 5], reflectance=.2)
+  arena.worldbody.add('geom', name="groundplane", type='plane', size=[2, 2, .1], material=grid)
+  arena.worldbody.add('camera', name="carcam", euler=[0, -90, -90], pos=[-3, 0, 0.5])
+
+  return arena
+
+gen_rand_xs = lambda: random_state.uniform(-1, 1, NUM_CREATURES)
+gen_rand_ys = lambda: random_state.uniform(-1, 1, NUM_CREATURES)
+gen_rand_zs = lambda: random_state.uniform(0.15, 0.15, NUM_CREATURES)
+gen_rand_rots = lambda: random_state.uniform(-180, 180, NUM_CREATURES)
+
+def gen_pos_orintations():
+  return  gen_rand_xs(), gen_rand_ys(), gen_rand_zs(), gen_rand_rots()
+
+def make_creatures(arena):
+  for idx, x in enumerate([-2, 2]):
+    light = arena.worldbody.add('light', pos=[x, -1, 3], dir=[-x, 1, -2], name=f"light{idx}")
+
+  creatures = [make_creature(i) for i in range(NUM_CREATURES)]
+  return creatures
 
 
-arena = mjcf.RootElement()
-tglobal = arena.visual.get_children("global")
-tglobal.set_attributes(offwidth=f"{img_width}")
-tglobal.set_attributes(offheight=f"{img_height}")
+def add_creatures_to_arena(arena, creatures):
+  xs, ys, zs, rots = gen_pos_orintations()
+  for i, creature in enumerate(creatures):
+    spawn_pos = (xs.flat[i], ys.flat[i], zs.flat[i])
+    spawn_site = arena.worldbody.add('site', 
+    name=f"sitename{i}",
+    pos=spawn_pos, 
+    group=3, 
+    euler=np.array([0, 0, rots.flat[i]]))
+    # Attach to the arena at the spawn sites, with a free joint.
+    attached = spawn_site.attach(creature)
+    attached.add('freejoint', name=f"joint{i}")
+    print(creature.geom_pos)
 
-checkered = arena.asset.add('texture', type='2d', builtin='checker', width=300,
-                            height=300, rgb1=[.2, .3, .4], rgb2=[.3, .4, .5])
-grid = arena.asset.add('material', name='grid', texture=checkered,
-                       texrepeat=[5, 5], reflectance=.2)
-arena.worldbody.add('geom', name="groundplane", type='plane', size=[2, 2, .1], material=grid)
-arena.worldbody.add('camera', name="carcam", euler=[0, -90, -90], pos=[-3, 0, 0.5])
-for idx, x in enumerate([-2, 2]):
-  light = arena.worldbody.add('light', pos=[x, -1, 3], dir=[-x, 1, -2], name=f"light{idx}")
+arena = make_arena()
+creatures = make_creatures(arena)
+add_creatures_to_arena(arena, creatures)
 
-creatures = [make_creature(i) for i in range(6)]
+def make_box(camera: depth_camera.DepthCamera):
+  mesh = o3d.geometry.TriangleMesh()
 
-# Place them on a grid in the arena.
-height = .15
+  for _ in range(NUM_CREATURES):
+    cube = o3d.geometry.TriangleMesh.create_box(*BODY_SIZE)
+    cube.translate(
+        (
+            np.random.uniform(0,1),
+            np.random.uniform(0,1),
+            np.random.uniform(0,1),
+        ),
+        relative=False,
+    )
+    # cube.compute_vertex_normals()
+    mesh += cube
+  mesh.compute_vertex_normals()
+  o3d.io.write_triangle_mesh(f"{dataset_folder}/cube_mesh.ply", mesh)
+  # o3d.visualization.draw_geometries([cube])
 
-genx = lambda: random_state.uniform(-1, 1, len(creatures))
-geny = lambda: random_state.uniform(-1, 1, len(creatures))
-genz = lambda: random_state.uniform(height, height, len(creatures))
-genrot = lambda: random_state.uniform(-180, 180, len(creatures))
-xpos = genx()
-ypos = geny()
-zpos = genz()
-rotpos = genrot()
-
-def make_quat(rotpos):
-  return np.array([np.roll(Rotation.from_euler('xyz', [0, 0, r], degrees=True).as_quat(), 1) for r in rotpos])
 
 def make_object_box(xs, ys, zs, rots, body_size, camera: depth_camera.DepthCamera):
   assert(len(xs) == len(ys))
@@ -185,18 +229,6 @@ Path(f"{dataset_folder}/calib").mkdir(parents=True, exist_ok=True)
 Path(f"{dataset_folder}/label_2").mkdir(parents=True, exist_ok=True)
 Path(f"{dataset_folder}/ImageSets").mkdir(parents=True, exist_ok=True)
 
-
-for i, model in enumerate(creatures):
-  spawn_pos = (xpos.flat[i], ypos.flat[i], zpos.flat[i])
-  spawn_site = arena.worldbody.add('site', 
-  name=f"sitename{i}",
-  pos=spawn_pos, 
-  group=3, 
-  euler=np.array([0, 0, rotpos.flat[i]]))
-  # Attach to the arena at the spawn sites, with a free joint.
-  attached = spawn_site.attach(model)
-  attached.add('freejoint', name=f"joint{i}")
-
 # Instantiate the physics and render.
 physics = mjcf.Physics.from_mjcf_model(arena)
 for idx in range(1, 2):
@@ -204,10 +236,10 @@ for idx in range(1, 2):
   # print(physics.data.qpos)
   # print(physics.data.xquat.shape)
   # print(physics.data.xquat)
-  xs = genx()
-  ys = geny()
-  zs = genz()
-  rots = genrot()
+  xs = gen_rand_xs()
+  ys = gen_rand_ys()
+  zs = gen_rand_zs()
+  rots = gen_rand_rots()
   quats = make_quat(rots).T
   with physics.reset_context():
     physics.data.qpos[0::7] = xs
@@ -217,9 +249,9 @@ for idx in range(1, 2):
     physics.data.qpos[4::7] = quats[1]
     physics.data.qpos[5::7] = quats[2]
     physics.data.qpos[6::7] = quats[3]
-    # physics.data.geom_xpos[1:,1][:] = geny()
-    # physics.data.geom_xpos[1:,2][:] = genz()
-    # physics.data.xquat[1:][:] = make_quad(genrot())
+    # physics.data.geom_xpos[1:,1][:] = gen_rand_ys()
+    # physics.data.geom_xpos[1:,2][:] = gen_rand_zs()
+    # physics.data.xquat[1:][:] = make_quad(gen_rand_rots())
     
   # print(physics.data.xpos)
   # print(physics.data.xquat)
@@ -231,6 +263,8 @@ for idx in range(1, 2):
   camera.save_kitti_pc(f"{dataset_folder}/velodyne/{idx:06d}.bin", True)
   camera.save_img(f"{dataset_folder}/image_2/{idx:06d}.png")
   camera.save_calibration(f"{dataset_folder}/calib/{idx:06d}.txt")
+
+  make_box(camera)
 
   boxes = make_object_box(xs, ys, zs, rots, BODY_SIZE, camera)  
   save_object_boxes(boxes, f"{dataset_folder}/label_2/{idx:06d}.txt")

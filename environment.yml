@@ -11,4 +11,5 @@ dependencies:
     - matplotlib
     - numpy
     - pyntcloud
+    - open3d
 prefix: /home/k/miniconda3/envs/dmcontrol_repro
