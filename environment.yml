@@ -1,0 +1,14 @@
+name: dmcontrol_repro
+channels:
+  - defaults
+dependencies:
+  - ipython
+  - pip  
+  - python=3.7
+  - py-opencv
+  - pip:
+    - dm_control
+    - matplotlib
+    - numpy
+    - pyntcloud
+prefix: /home/k/miniconda3/envs/dmcontrol_repro

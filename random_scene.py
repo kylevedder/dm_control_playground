@@ -141,7 +141,7 @@ def make_object_box(xs, ys, zs, rots, body_size, camera: depth_camera.DepthCamer
   # 1 truncated
   label_lst.append(np.zeros(len(xs)))
   # 1 occluded
-  label_lst.append(np.zeros(len(xs)).astype(np.int))
+  label_lst.append(np.zeros(len(xs)).astype(np.int32))
   # 1 alpha
   label_lst.append(rots)
   # 4 bbox
@@ -173,7 +173,7 @@ def save_object_boxes(arr_lst, filename):
   f.close()
 
 def render_object_boxes(arr_lst, filename):
-  filtered_lst = arr_lst[:,11:14].astype(np.float)
+  filtered_lst = arr_lst[:,11:14].astype(np.float32)
   PyntCloud(pd.DataFrame(data=filtered_lst,
         columns=["x", "y", "z"])).to_file(filename)
 
@@ -199,7 +199,7 @@ for i, model in enumerate(creatures):
 
 # Instantiate the physics and render.
 physics = mjcf.Physics.from_mjcf_model(arena)
-for idx in range(1, 30):
+for idx in range(1, 2):
   # print(physics.data.qpos.shape)
   # print(physics.data.qpos)
   # print(physics.data.xquat.shape)
