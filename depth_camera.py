@@ -7,18 +7,65 @@ import pandas as pd
 class DepthCamera:
   def __init__(self, camera):
     self.camera = camera
+    self.video_frames = []
 
 
   def render_depth(self):
     return self.camera.render(depth=True)
-
   
   def render_img(self):
     return self.camera.render()
 
+  def render_video_frame(self):
+    self.video_frames.append(self.render_img().copy())
 
-  def render_camera_frame_pc(self):
+  def render_segmentation(self):
+    sem = self.camera.render(segmentation=True)
+    img = np.zeros((*sem.shape[0:2], 3))
+    types = sem[:, :, 0]
+    ids = sem[:, :, 1]
+    max_val = max(np.unique(types))
+    for t in np.unique(types):
+      if t <= 0:
+        continue
+      img[types == t, 0] = t / max_val
+    return (img * 255).astype(np.uint8)
+
+  def render_depth_minus_background(self):
     depth_img = self.render_depth()
+    types = self.camera.render(segmentation=True)[:,:,0]
+    depth_img[types <= 0] = np.nan
+    return depth_img
+
+
+  def save_video(self, filename, framerate=30):
+    import matplotlib
+    import matplotlib.animation as animation
+    import matplotlib.pyplot as plt
+    plt.rcParams['animation.ffmpeg_path'] = '/usr/bin/ffmpeg'
+    height, width, _ = self.video_frames[0].shape
+    dpi = 70
+    orig_backend = matplotlib.get_backend()
+    matplotlib.use('Agg')  # Switch to headless 'Agg' to inhibit figure rendering.
+    fig, ax = plt.subplots(1, 1, figsize=(width / dpi, height / dpi), dpi=dpi)
+    matplotlib.use(orig_backend)  # Switch back to the original backend.
+    ax.set_axis_off()
+    ax.set_aspect('equal')
+    ax.set_position([0, 0, 1, 1])
+    im = ax.imshow(self.video_frames[0])
+    def update(frame):
+      im.set_data(frame)
+      return [im]
+    interval = 1000/framerate
+    anim = animation.FuncAnimation(fig=fig, func=update, frames=self.video_frames,
+                                   interval=interval, blit=True, repeat=False)
+    return anim.save(filename)
+
+  def render_camera_frame_pc(self, background_subtract=False):
+    if background_subtract:
+      depth_img = self.render_depth_minus_background()
+    else:
+      depth_img = self.render_depth()
     image, focal, _, _ = self.camera.matrices()
     pc = cv2.rgbd.depthTo3d(depth_img, image @ focal[:, :3])
     pc = pc.reshape(pc.shape[0] * pc.shape[1], 3)
@@ -46,26 +93,8 @@ class DepthCamera:
   def render_world_frame_pc(self):
     return self.render_world_frame_homogenious_pc()[:, :3]
 
-
-  def save_kitti_pc(self, filename, print_bounds=False):
-    data = self.render_camera_frame_homogenious_pc()
-    if print_bounds:
-        pxs, pys, pzs, _ = zip(*data)
-        print("Min pxs:", min(pxs), "Max pxs:", max(pxs))
-        print("Min pys:", min(pys), "Max pys:", max(pys))
-        print("Min pzs:", min(pzs), "Max pzs:", max(pzs))
-
-    assert(data.shape[1] == 4)
-    data[:,3] = 1
-    data = data.astype(np.float32)
-    f = open(filename, "wb")
-    for e in data:
-      f.write(e.ravel())
-    f.close()
-
-
-  def save_ply(self, filename):
-    PyntCloud(pd.DataFrame(data=self.render_camera_frame_pc(),
+  def save_ply(self, filename, background_subtract=False):
+    PyntCloud(pd.DataFrame(data=self.render_camera_frame_pc(background_subtract=background_subtract),
         columns=["x", "y", "z"])).to_file(filename)
 
 
@@ -74,31 +103,10 @@ class DepthCamera:
     im = Image.fromarray(img)
     im.save(filename)
 
+  def save_segmentation(self, filename):
+    img = self.render_segmentation()
+    im = Image.fromarray(img)
+    im.save(filename)
 
-  def save_calibration(self, filename):
-    def identity_proj():
-      arr = np.zeros((3,4))
-      arr[0,0] = 1
-      arr[1,1] = 1
-      arr[2,2] = 1
-      return arr
-
-    def write_arr(f, name, arr):
-      f.write(name + ": ")
-      for r in arr:    
-        f.write(' '.join([str(e) for e in r]) + ' ')
-      f.write('\n')
-
-    _, _, rotation, translation = self.camera.matrices()
-
-    f = open(filename, 'w')
-    write_arr(f, "P0", self.camera.matrix)
-    write_arr(f, "P1", self.camera.matrix)
-    write_arr(f, "P2", self.camera.matrix)
-    write_arr(f, "P3", self.camera.matrix)
-    write_arr(f, "R0_rect", np.eye(3))
-    write_arr(f, "Tr_velo_to_cam", -translation @ np.linalg.inv(rotation))
-    write_arr(f, "Tr_imu_to_velo", identity_proj())
-    f.close()
 
 

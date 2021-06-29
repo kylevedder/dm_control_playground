@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+
+from pandas.core import frame
 from old.depth_camera import DepthCamera
 import dm_control
 import dm_control.mujoco as mujoco
@@ -8,6 +10,7 @@ import numpy as np
 import itertools
 import cv2
 import depth_camera
+import spider
 from PIL import Image
 import pandas as pd
 import sys
@@ -68,9 +71,9 @@ from IPython.display import HTML
 import PIL.Image
 np.random.seed(1)
 
-img_width = 320//2
-img_height = 240//2
-NUM_CREATURES = 6
+img_width = 640
+img_height = 480
+NUM_CREATURES = 4
 BODY_RADIUS = 0.1
 BODY_SIZE = (BODY_RADIUS, BODY_RADIUS/2, BODY_RADIUS / 2)
 random_state = np.random.RandomState(42)
@@ -83,13 +86,6 @@ dataset_folder = args.dataset_folder
 
 def make_quat(rotpos):
   return np.array([np.roll(Rotation.from_euler('xyz', [0, 0, r], degrees=True).as_quat(), 1) for r in rotpos])
-
-def make_creature(idx):
-  rgba = random_state.uniform([0, 0, 0, 1], [1, 1, 1, 1])
-  model = mjcf.RootElement()
-  model.worldbody.add(
-      'geom', name=f'torso{idx}', type='ellipsoid', size=BODY_SIZE, rgba=rgba)
-  return model
 
 def make_arena():
   arena = mjcf.RootElement()
@@ -109,47 +105,30 @@ def make_arena():
 
   return arena
 
-gen_rand_xs = lambda: random_state.uniform(-1, 1, NUM_CREATURES)
-gen_rand_ys = lambda: random_state.uniform(-1, 1, NUM_CREATURES)
-gen_rand_zs = lambda: random_state.uniform(0.15, 0.15, NUM_CREATURES)
-gen_rand_rots = lambda: random_state.uniform(-180, 180, NUM_CREATURES)
+gen_rand_x = lambda: random_state.uniform(-1, 1)
+gen_rand_y = lambda: random_state.uniform(-1, 1)
+gen_rand_z = lambda: random_state.uniform(0.15, 0.15)
+gen_rand_rot = lambda: random_state.uniform(-180, 180)
 
-def gen_pos_orintations():
-  return  gen_rand_xs(), gen_rand_ys(), gen_rand_zs(), gen_rand_rots()
+def gen_pos_orintation():
+  return  gen_rand_x(), gen_rand_y(), gen_rand_z(), gen_rand_rot()
 
-def make_creatures(arena):
-  creatures = [make_creature(i) for i in range(NUM_CREATURES)]
-  xs, ys, zs, rots = gen_pos_orintations()
-  for i, creature in enumerate(creatures):
-    spawn_pos = (xs.flat[i], ys.flat[i], zs.flat[i])
-    spawn_site = arena.worldbody.add('site', 
-    name=f"creaturesite{i}",
-    pos=spawn_pos, 
-    group=3, 
-    euler=np.array([0, 0, rots.flat[i]]))
-    # Attach to the arena at the spawn sites, with a free joint.
-    attached = spawn_site.attach(creature)
-    attach_joint = attached.add('freejoint', name=f"creaturejoint{i}")
-    creature.actuator.add('position', joint=attach_joint, kp=10)
-  return creatures
-  
+def make_spiders(arena, num_spiders):
+  spiders = [spider.Spider() for _ in range(num_spiders)]
+  for s in spiders:
+    x, y, z, _ = gen_pos_orintation()
+    s.add_to_arena(arena, (x, y, z))
+  return spiders
 
 arena = make_arena()
-creatures = make_creatures(arena)
-actuators = [a for creature in creatures for a in creature.find_all('actuator')]
-print(arena.to_xml_string())
+creatures = make_spiders(arena, NUM_CREATURES)
+actuators = [a for creature in creatures for a in creature.actuators()]
 
-def make_boxs(idx, arena, camera : depth_camera.DepthCamera):
-  # print("Arena:")  
-  # help(arena.worldbody)
-  # print(arena.worldbody.all_children())
-  # print(mjcf.RootElement().worldbody)
+def make_cylinders(idx, physics, camera : depth_camera.DepthCamera):
   mesh = o3d.geometry.TriangleMesh()
-
-  for creature_site in arena.worldbody.get_children("site"):
-    x, y, z = creature_site.pos
-    _, _, rot = creature_site.euler
-
+  model_names = ['unnamed_model/'] + ['unnamed_model_{}/'.format(idx) for idx in range(1, NUM_CREATURES)]
+  for model_name in model_names:
+    x, y, z, r1, r2, r3, r4 = physics.named.data.qpos[model_name]
     _, _, rotation, translation = camera.camera.matrices()
     global_pos = np.array([x, y, z, 1])
     depth_pos = rotation @ -translation @ global_pos
@@ -157,15 +136,12 @@ def make_boxs(idx, arena, camera : depth_camera.DepthCamera):
     yt, zt = zt, yt
     zt = -zt
     xt, yt = yt, xt
-    # np.concatenate([xs.reshape(1, len(xs)), ys.reshape(1, len(ys)), zs.reshape(1, len(zs)), np.ones((1, len(xs)))])
 
-    # print(creature_site.euler)
-    cube = o3d.geometry.TriangleMesh.create_box(*[e * 2 for e in BODY_SIZE])
-    cube.rotate(Rotation.from_euler('xyz', [0, 0, rot], degrees=True).as_matrix(), 
-                cube.get_center())
-    cube.translate((xt, yt, zt), relative=False)
-    # cube.compute_vertex_normals()
-    mesh += cube
+    cyl = o3d.geometry.TriangleMesh.create_cylinder(BODY_SIZE[0], BODY_SIZE[2])
+    cyl.rotate(Rotation.from_quat([r2, r3, r4, r1]).as_matrix(), 
+                cyl.get_center())
+    cyl.translate((xt, yt, zt), relative=False)
+    mesh += cyl
   mesh.compute_vertex_normals()
   o3d.io.write_triangle_mesh(f"{dataset_folder}/{idx:06d}_mesh.ply", mesh)
 
@@ -175,46 +151,33 @@ Path(f"{dataset_folder}/").mkdir(parents=True, exist_ok=True)
 # # Instantiate the physics and render.
 physics = mjcf.Physics.from_mjcf_model(arena)
 physics.reset()
-for idx in range(1, 2):
-  print(physics.bind(actuators).ctrl)
-  physics.bind(actuators).ctrl = np.ones(NUM_CREATURES) * physics.data.time * 50
-  # physics.bind(actuators).ctrl = amp * np.sin(freq * physics.data.time + phase)
+camera = depth_camera.DepthCamera(mujoco.Camera(physics, img_height, img_width, camera_id="carcam"))
+
+duration = 5   # (Seconds)
+framerate = 30  # (Hz)
+steps_per_sec = 1//physics.timestep() # (Hz)
+steps_per_render = steps_per_sec // framerate
+
+print("Timestep:", physics.timestep(), "Framerate:", framerate)
+idx = 0
+step = 0
+
+freq = 5
+phase = 2 * np.pi * random_state.rand(len(actuators))
+amp = 2
+
+# for step in range(500):
+while physics.data.time < duration:
+  step += 1
+  physics.bind(actuators).ctrl = amp * np.sin(freq * physics.data.time + phase)
   physics.step()
-#   # print(physics.data.qpos.shape)
-#   # print(physics.data.qpos)
-#   # print(physics.data.xquat.shape)
-#   # print(physics.data.xquat)
-#   xs = gen_rand_xs()
-#   ys = gen_rand_ys()
-#   zs = gen_rand_zs()
-#   rots = gen_rand_rots()
-#   quats = make_quat(rots).T
-  # with physics.reset_context():
-# print(physics.named.data.qpos)
-#     physics.data.qpos[0::7] = xs
-#     physics.data.qpos[1::7] = ys
-#     physics.data.qpos[2::7] = zs
-#     physics.data.qpos[3::7] = quats[0]
-#     physics.data.qpos[4::7] = quats[1]
-#     physics.data.qpos[5::7] = quats[2]
-#     physics.data.qpos[6::7] = quats[3]
-#     # physics.data.geom_xpos[1:,1][:] = gen_rand_ys()
-#     # physics.data.geom_xpos[1:,2][:] = gen_rand_zs()
-#     # physics.data.xquat[1:][:] = make_quad(gen_rand_rots())
-    
-#   # print(physics.data.xpos)
-#   # print(physics.data.xquat)
-#   # help(physics.data)
+  if step % steps_per_render == 0:
+    camera.render_video_frame()
+    camera.save_ply(f"{dataset_folder}/{idx:06d}.ply")
+    camera.save_ply(f"{dataset_folder}/{idx:06d}_noback.ply", background_subtract=True)
+    camera.save_img(f"{dataset_folder}/{idx:06d}.png")
+    camera.save_segmentation(f"{dataset_folder}/{idx:06d}_semantics.png")
+    make_cylinders(idx, physics, camera)
+    idx += 1
 
-  
-  camera = depth_camera.DepthCamera(mujoco.Camera(physics, img_height, img_width, camera_id="carcam"))
-  camera.save_ply(f"{dataset_folder}/{idx:06d}.ply")
-
-  make_boxs(idx, arena, camera)
-
-  # boxes = make_object_box(xs, ys, zs, rots, BODY_SIZE, camera)  
-  # save_object_boxes(boxes, f"{dataset_folder}/label_2/{idx:06d}.txt")
-  # render_object_boxes(boxes,f"{dataset_folder}/{idx:06d}_labels.ply")
-  # print("Saved instance {}".format(idx))
-
-
+camera.save_video("scene_video.mp4", framerate)
