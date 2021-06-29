@@ -74,8 +74,6 @@ np.random.seed(1)
 img_width = 640
 img_height = 480
 NUM_CREATURES = 4
-BODY_RADIUS = 0.1
-BODY_SIZE = (BODY_RADIUS, BODY_RADIUS/2, BODY_RADIUS / 2)
 random_state = np.random.RandomState(42)
 
 parser = argparse.ArgumentParser()
@@ -92,6 +90,8 @@ def make_arena():
   tglobal = arena.visual.get_children("global")
   tglobal.set_attributes(offwidth=f"{img_width}")
   tglobal.set_attributes(offheight=f"{img_height}")
+  tquality = arena.visual.get_children("quality")
+  tquality.set_attributes(offsamples=0)
 
   checkered = arena.asset.add('texture', type='2d', builtin='checker', width=300,
                               height=300, rgb1=[.2, .3, .4], rgb2=[.3, .4, .5])
@@ -124,10 +124,10 @@ arena = make_arena()
 creatures = make_spiders(arena, NUM_CREATURES)
 actuators = [a for creature in creatures for a in creature.actuators()]
 
-def make_cylinders(idx, physics, camera : depth_camera.DepthCamera):
+def make_cylinders(idx, physics, creatures, camera : depth_camera.DepthCamera):
   mesh = o3d.geometry.TriangleMesh()
-  model_names = ['unnamed_model/'] + ['unnamed_model_{}/'.format(idx) for idx in range(1, NUM_CREATURES)]
-  for model_name in model_names:
+  model_names = ['unnamed_model/'] + ['unnamed_model_{}/'.format(idx) for idx in range(1, len(creatures))]
+  for model_name, creature in zip(model_names, creatures):
     x, y, z, r1, r2, r3, r4 = physics.named.data.qpos[model_name]
     _, _, rotation, translation = camera.camera.matrices()
     global_pos = np.array([x, y, z, 1])
@@ -137,7 +137,7 @@ def make_cylinders(idx, physics, camera : depth_camera.DepthCamera):
     zt = -zt
     xt, yt = yt, xt
 
-    cyl = o3d.geometry.TriangleMesh.create_cylinder(BODY_SIZE[0], BODY_SIZE[2])
+    cyl = o3d.geometry.TriangleMesh.create_cylinder(creature.body_radius, creature.body_height)
     cyl.rotate(Rotation.from_quat([r2, r3, r4, r1]).as_matrix(), 
                 cyl.get_center())
     cyl.translate((xt, yt, zt), relative=False)
@@ -148,6 +148,7 @@ def make_cylinders(idx, physics, camera : depth_camera.DepthCamera):
 
 from pathlib import Path
 Path(f"{dataset_folder}/").mkdir(parents=True, exist_ok=True)
+print(arena.to_xml_string())
 # # Instantiate the physics and render.
 physics = mjcf.Physics.from_mjcf_model(arena)
 physics.reset()
@@ -177,7 +178,7 @@ while physics.data.time < duration:
     camera.save_ply(f"{dataset_folder}/{idx:06d}_noback.ply", background_subtract=True)
     camera.save_img(f"{dataset_folder}/{idx:06d}.png")
     camera.save_segmentation(f"{dataset_folder}/{idx:06d}_semantics.png")
-    make_cylinders(idx, physics, camera)
+    make_cylinders(idx, physics, creatures, camera)
     idx += 1
 
 camera.save_video("scene_video.mp4", framerate)
