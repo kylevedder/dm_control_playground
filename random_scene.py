@@ -2,7 +2,6 @@
 import argparse
 
 from pandas.core import frame
-from old.depth_camera import DepthCamera
 import dm_control
 import dm_control.mujoco as mujoco
 import matplotlib.pyplot as plt
