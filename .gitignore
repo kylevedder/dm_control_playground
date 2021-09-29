@@ -7,3 +7,4 @@ print(arena.to_xml_string())
 __pycache__/
 contrast_pairs/
 pcs_and_classes/
+.vscode/
